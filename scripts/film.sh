@@ -27,6 +27,24 @@ DISP=:99
 CLIENT_LOG="$HOME/.local/share/cinnabar/logs/client.log"
 
 mkdir -p "$OUT/shots"
+
+# Pinned Cinnabar build: cinnabar-pin.txt = "<release tag> <sha256 of Cinnabar-x86_64.AppImage>" (an official,
+# unmodified upstream build, e.g. a nightly). Used only when the download matches that exact hash; otherwise the
+# workflow's release (v0.2.1) films as before. Nothing is redistributed: the runner fetches it from upstream.
+PIN_FILE="$(dirname "$0")/../cinnabar-pin.txt"
+if [ -s "$PIN_FILE" ]; then
+  read -r PIN_TAG PIN_SHA < "$PIN_FILE"
+  PIN_DIR="$HOME/tools/cinnabar-pin"
+  if [ ! -x "$PIN_DIR/squashfs-root/AppRun" ]; then
+    mkdir -p "$PIN_DIR"
+    curl -fsSL -o "$PIN_DIR/c.AppImage" "https://github.com/cinnabar-mc/cinnabar/releases/download/$PIN_TAG/Cinnabar-x86_64.AppImage" > /dev/null 2>&1 || true
+    if echo "$PIN_SHA  $PIN_DIR/c.AppImage" | sha256sum -c - > /dev/null 2>&1; then
+      ( cd "$PIN_DIR" && chmod +x c.AppImage && ./c.AppImage --appimage-extract > /dev/null && rm c.AppImage )
+    fi
+  fi
+  if [ -x "$PIN_DIR/squashfs-root/AppRun" ]; then CINNABAR="$PIN_DIR/squashfs-root/AppRun"; echo "[pin] pinned build" >&2
+  else echo "[pin] pinned build unavailable (hash changed?), using the release" >&2; fi
+fi
 exec 3>&1 >>"$OUT/run.log" 2>&1
 T0=$(date +%s)
 log() { echo "[$(date -u +%H:%M:%S.%N | cut -c1-12)] [+$(( $(date +%s) - T0 ))s] $*" >> "$OUT/timeline.log"; }
