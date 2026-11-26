@@ -11,6 +11,11 @@ software, join a server, film a short PvP scene and hand back an MP4?
 - `server/plugins/CamTest.php`: one-file script plugin that places the camera and two sparring NPCs.
 - `bot/sparring.mjs`: an offline second player (bedrock-protocol) so a real network player is in shot.
 - `scripts/run.sh`: the run itself; writes `summary.json` (fps, CPU per process, timings).
+- `.github/workflows/film.yml` (production): films one replay on the real server for a staff report. Inputs are a
+  public job id and an age-encrypted payload (to `.github/cam-runner-recipient.txt`; the runner's identity is the
+  `CAM_RUNNER_AGE_IDENTITY` secret). The server address is the `SERVER_ADDR` secret. Output: the MP4 encrypted to
+  `.github/bot-recipient.txt` (the Discord bot) and `.github/clip-recipient.txt`, kept 1 day; the bot deletes the run.
+- `.github/workflows/ping.yml`: a RakNet unconnected ping (server-list ping, no join) to an encrypted address.
 
 ## Privacy
 Clips and detailed logs are encrypted on the runner with [age](https://age-encryption.org) to the public recipient in
@@ -22,9 +27,10 @@ off GitHub) can decrypt:
 The public Actions log shows stage names and numbers only. A real server address and camera name, if ever used,
 come from repository secrets (`SERVER_ADDR`, `CAMERA_NAME`) and are masked.
 
-## Third-party software
-- Cinnabar is licensed **PolyForm Noncommercial 1.0.0**; this repository only downloads its official release for a
-  noncommercial test. On first run Cinnabar downloads Mojang's public sample resource pack after
+## Credits and third-party software
+- **[Cinnabar](https://github.com/cinnabar-mc/cinnabar)** by the Cinnabar maintainers renders every clip: an
+  independent Minecraft: Bedrock Edition client. It is licensed PolyForm Noncommercial 1.0.0 and is **used here with
+  the maintainers' permission** (on-demand staff report clips, unmodified v0.2.1 release). Thank you! On first run Cinnabar downloads Mojang's public sample resource pack after
   `CINNABAR_ACCEPT_MOJANG_EULA=1` (the Minecraft EULA applies). Not an official Minecraft product.
 - PocketMine-MP (NetherGames fork, LGPL-3.0): the `pm-ng-eaa2e581` release asset is an unmodified build of
   https://github.com/NetherGamesMC/PocketMine-MP at commit `eaa2e58156e71e7a10093cffc98b02e1023f05ee`

@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: local (throwaway test server) or remote (SERVER_ADDR secret)
+        description: local (throwaway test server), film-local (production film.sh against the local test server) or remote (SERVER_ADDR secret)
         default: local
       record_seconds:
         description: Seconds of clip
@@ -103,7 +103,7 @@ jobs:
           restore-keys: shaders-${{ inputs.cinnabar_tag }}-${{ inputs.backend }}-${{ runner.arch }}-
 
       - name: Local test server (unmodified NetherGames PocketMine-MP phar, Axolotl PHP 8.4)
-        if: inputs.target == 'local'
+        if: inputs.target != 'remote'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -141,7 +141,8 @@ jobs:
           SPEED: ${{ inputs.speed }}
           CINNABAR: /home/runner/tools/cinnabar/squashfs-root/AppRun
           OUT: ${{ github.workspace }}/out
-        run: bash scripts/run.sh
+        run: |
+          if [ "$TARGET" = film-local ]; then bash scripts/film_local_test.sh; else bash scripts/run.sh; fi
 
       - name: Encrypt outputs (age) and remove plaintext
         if: always()
@@ -149,8 +150,9 @@ jobs:
           mkdir -p out enc
           echo "job_seconds_before_upload=$(( $(date +%s) - JOB_T0 ))" | tee out/job-time.txt
           RECIPIENT=$(cat .github/clip-recipient.txt)
-          if [ -f out/clip.mp4 ]; then age -r "$RECIPIENT" -o enc/clip.mp4.age out/clip.mp4; fi
-          tar -C out --exclude=./clip.mp4 --exclude=./raw.mp4 -czf - . | age -r "$RECIPIENT" -o enc/logs.tar.gz.age
+          BOT=$(cat .github/bot-recipient.txt)
+          if [ -f out/clip.mp4 ]; then age -r "$RECIPIENT" -r "$BOT" -o enc/clip.mp4.age out/clip.mp4; fi
+          tar -C out --exclude=./clip.mp4 --exclude=./raw.mp4 --exclude=./raw.mkv -czf - . | age -r "$RECIPIENT" -o enc/logs.tar.gz.age
           rm -rf out
           rm -rf ~/.local/share/cinnabar/logs ~/.local/share/cinnabar/run ~/.local/share/cinnabar/crashes
           ls -l enc

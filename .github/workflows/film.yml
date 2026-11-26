@@ -1,0 +1,131 @@
+name: film
+run-name: film ${{ inputs.job_id }}
+
+# Production: film one PvP clip replay on the real server for a staff report.
+# The Discord bot registers a one-time camera name on the server, then dispatches this workflow with an
+# age-encrypted payload {"v":1,"clip","cam","view","seconds"} (to .github/cam-runner-recipient.txt). The runner
+# joins SERVER_ADDR (secret) as that camera, records 854x480 at 1x, encrypts the MP4 to the bot (and the owner's
+# analysis key) and uploads it for 1 day; the bot downloads it and deletes the run.
+# PRIVACY: public repository. Inputs carry no clear-text names or ids; all values are masked; logs say only stages.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: bot job id (j + 12 hex)
+        required: true
+      payload:
+        description: base64 age ciphertext (see header)
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CINNABAR_TAG: v0.2.1
+
+jobs:
+  film:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check inputs and mask the server address
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          SERVER_ADDR: ${{ secrets.SERVER_ADDR }}
+        run: |
+          [[ "$JOB_ID" =~ ^j[0-9a-f]{12}$ ]] || { echo "bad job id"; exit 1; }
+          [ -n "$SERVER_ADDR" ] || { echo "SERVER_ADDR secret is not set"; exit 1; }
+          echo "::add-mask::${SERVER_ADDR%:*}"
+          echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update -q > /dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            xvfb xdotool x11-utils mesa-vulkan-drivers libvulkan1 \
+            libgl1-mesa-dri libegl1 libegl-mesa0 libgles2 libgbm1 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 libx11-xcb1 libxcb-shape0 libxcb-xfixes0 \
+            libasound2t64 libudev1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libfontconfig1 \
+            ffmpeg sysstat age > /dev/null
+          echo "packages ok"
+
+      - name: Open payload
+        env:
+          PAYLOAD: ${{ inputs.payload }}
+          CAM_RUNNER_AGE_IDENTITY: ${{ secrets.CAM_RUNNER_AGE_IDENTITY }}
+        run: python3 scripts/open_payload.py film
+
+      - name: Cache Cinnabar app
+        id: cache-app
+        uses: actions/cache@v4
+        with:
+          path: ~/tools/cinnabar
+          key: cinnabar-app-${{ env.CINNABAR_TAG }}
+
+      - name: Download Cinnabar
+        if: steps.cache-app.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/tools/cinnabar && cd ~/tools/cinnabar
+          base=https://github.com/cinnabar-mc/cinnabar/releases/download/$CINNABAR_TAG
+          curl -fsSL -o Cinnabar-x86_64.AppImage "$base/Cinnabar-x86_64.AppImage"
+          curl -fsSL -o SHA256SUMS.txt "$base/SHA256SUMS.txt"
+          grep ' Cinnabar-x86_64.AppImage$' SHA256SUMS.txt | sha256sum -c -
+          chmod +x Cinnabar-x86_64.AppImage
+          ./Cinnabar-x86_64.AppImage --appimage-extract > /dev/null
+          rm Cinnabar-x86_64.AppImage
+
+      - name: Cache Cinnabar prepared assets
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/share/cinnabar
+          key: cinnabar-data-${{ env.CINNABAR_TAG }}-v1
+
+      - name: Cache shader cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/mesa_shader_cache
+            ~/.cache/mesa_shader_cache_db
+          key: shaders-${{ env.CINNABAR_TAG }}-vulkan-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: shaders-${{ env.CINNABAR_TAG }}-vulkan-${{ runner.arch }}-
+
+      - name: Film
+        env:
+          SERVER_ADDR: ${{ secrets.SERVER_ADDR }}
+          CINNABAR: /home/runner/tools/cinnabar/squashfs-root/AppRun
+          OUT: ${{ github.workspace }}/out
+        run: bash scripts/film.sh
+
+      - name: Encrypt and remove plaintext
+        if: always()
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          mkdir -p out enc
+          echo "job_seconds=$(( $(date +%s) - JOB_T0 ))" | tee out/job-time.txt
+          R1=$(cat .github/bot-recipient.txt); R2=$(cat .github/clip-recipient.txt)
+          if [ -s out/clip.mp4 ]; then age -r "$R1" -r "$R2" -o enc/clip.mp4.age out/clip.mp4; fi
+          tar -C out --exclude=./clip.mp4 --exclude=./raw.mkv -czf - . | age -r "$R1" -r "$R2" -o enc/log.tar.gz.age
+          rm -rf out ~/.local/share/cinnabar/logs ~/.local/share/cinnabar/run ~/.local/share/cinnabar/crashes
+          ls -l enc | awk 'NR>1{print $5, $9}'
+
+      - name: Upload encrypted clip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clip-${{ inputs.job_id }}
+          path: enc/clip.mp4.age
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Upload encrypted log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ inputs.job_id }}
+          path: enc/log.tar.gz.age
+          if-no-files-found: ignore
+          retention-days: 1

@@ -1,0 +1,30 @@
+name: ping
+
+# Harmless reachability check from a GitHub runner: a RakNet unconnected ping (the server-list ping), no join.
+# The address arrives age-encrypted in `payload` (to .github/cam-runner-recipient.txt) and is masked.
+
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: base64 age ciphertext of {"v":1,"addr":"host:port"}
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: age
+        run: sudo apt-get install -y -q --no-install-recommends age > /dev/null
+      - name: Open payload
+        env:
+          PAYLOAD: ${{ inputs.payload }}
+          CAM_RUNNER_AGE_IDENTITY: ${{ secrets.CAM_RUNNER_AGE_IDENTITY }}
+        run: python3 scripts/open_payload.py ping
+      - name: RakNet unconnected ping
+        run: python3 scripts/raknet_ping.py "$PING_ADDR" 5
