@@ -38,6 +38,7 @@ PIDS=()
 cleanup() {
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
   pkill -f bedrock-core 2>/dev/null || true
+  pulseaudio --kill 2>/dev/null || true
   sleep 1
   for p in "${PIDS[@]}"; do kill -9 "$p" 2>/dev/null || true; done
 }
@@ -72,6 +73,24 @@ PIDS+=("$!"); export DISPLAY=$DISP
 for i in $(seq 1 30); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.5; done
 pidstat -u -h -l 2 > "$OUT/pidstat.log" 2>&1 & PIDS+=("$!")
 
+# Sound: the runner has no sound card. A PulseAudio null sink is the client's output (ALSA default -> pulse);
+# ffmpeg records its monitor together with the screen. Without pulseaudio (or AUDIO=0) the clip is silent.
+AUDIO=${AUDIO:-1}
+if [ "$AUDIO" = 1 ] && ! command -v pulseaudio >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends     pulseaudio pulseaudio-utils libasound2-plugins > "$OUT/apt-audio.log" 2>&1 || true
+fi
+if [ "$AUDIO" = 1 ] && command -v pulseaudio >/dev/null 2>&1; then
+  printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > "$HOME/.asoundrc"
+  pulseaudio -n --daemonize=yes --exit-idle-time=-1 --log-target=file:"$OUT/pulse.log" \
+    --load="module-null-sink sink_name=cam rate=48000 channels=2" --load="module-native-protocol-unix" \
+    >/dev/null 2>&1 || true
+  for i in $(seq 1 20); do pactl info >/dev/null 2>&1 && break; sleep 0.25; done
+  if pactl info >/dev/null 2>&1; then pactl set-default-sink cam >/dev/null 2>&1 || true; else AUDIO=0; fi
+else
+  AUDIO=0
+fi
+say "audio: $AUDIO"
+
 export CINNABAR_ACCEPT_MOJANG_EULA=1
 export RUST_LOG=${RUST_LOG:-info,wgpu_core=warn,wgpu_hal=warn,naga=warn}
 export WGPU_BACKEND=vulkan
@@ -99,8 +118,10 @@ fi
 
 # 2. record from now (the client finishes its shader warmup, then spawns; the server starts the pre-roll then)
 REC0=$(date +%s.%N)
-ffmpeg -loglevel warning -y -f x11grab -draw_mouse 0 -framerate "$CAPTURE_FPS" -video_size "${W}x${H}" -i "$DISP" \
-  -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p "$OUT/raw.mkv" > "$OUT/ffmpeg-record.log" 2>&1 &
+AIN=(); AENC=()
+if [ "$AUDIO" = 1 ]; then AIN=(-thread_queue_size 1024 -f pulse -i cam.monitor); AENC=(-c:a pcm_s16le); fi
+ffmpeg -loglevel warning -y -thread_queue_size 512 -f x11grab -draw_mouse 0 -framerate "$CAPTURE_FPS" -video_size "${W}x${H}" -i "$DISP" \
+  "${AIN[@]}" -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p "${AENC[@]}" "$OUT/raw.mkv" > "$OUT/ffmpeg-record.log" 2>&1 &
 FF_PID=$!; PIDS+=("$FF_PID")
 while ! inlog "pipeline warmup finished"; do
   kill -0 "$CIN_PID" 2>/dev/null || fail "client exited while loading"
@@ -124,7 +145,7 @@ kill "$CIN_PID" 2>/dev/null || true
 START=$(python3 -c "import sys; print(max(0.0, float(sys.argv[1]) - float(sys.argv[2]) + 0.3))" "$READY" "$REC0")
 LEN=$(python3 -c "print($PRE_ROLL + $SECS + $TAIL - 0.3)")
 ffmpeg -loglevel warning -y -ss "$START" -i "$OUT/raw.mkv" -t "$LEN" -r 30 -c:v libx264 -preset medium -crf "$CRF" \
-  -pix_fmt yuv420p -movflags +faststart "$OUT/clip.mp4" || fail "encode failed"
+  -pix_fmt yuv420p -c:a aac -b:a 96k -movflags +faststart "$OUT/clip.mp4" || fail "encode failed"
 rm -f "$OUT/raw.mkv"
 mark encoded
 [ -s "$OUT/clip.mp4" ] || fail "empty clip"
