@@ -73,7 +73,9 @@ fail() {
 say "runner: $(nproc) vCPU, ${W}x${H}, clip ${SECS}s"
 rm -f "$CLIENT_LOG"
 
-# HUD hidden from the first frame (Cinnabar persists F1 as hide_hud); keep any other saved settings
+# HUD out of the picture from the first frame, keeping world labels: hide_hud (F1) would also hide nametags and the
+# replay's floating hit numbers, so the HUD is faded to 0 % opacity and the hand / paper doll are hidden instead
+# (CAM_HIDE_HUD=1 restores the old F1 behaviour). Keep any other saved settings.
 mkdir -p "$HOME/.config/cinnabar"
 python3 - "$HOME/.config/cinnabar/settings.json" <<'PY'
 import json, os, sys
@@ -82,7 +84,11 @@ try:
     s = json.load(open(p))
 except Exception:
     s = {"schema": 2}
-s.setdefault("values", {})["hide_hud"] = 1
+v = s.setdefault("values", {})
+if os.environ.get("CAM_HIDE_HUD") == "1":
+    v["hide_hud"] = 1
+else:
+    v.update({"hide_hud": 0, "interface_opacity": 0, "hide_hand": 1, "hide_paperdoll": 1, "ingame_player_names": 1})
 json.dump(s, open(p, "w"), indent=2)
 PY
 
