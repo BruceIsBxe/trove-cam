@@ -113,9 +113,9 @@ kill -INT "$FF_PID" 2>/dev/null; wait "$FF_PID" 2>/dev/null
 mark recorded; say "recording stopped"
 kill "$CIN_PID" 2>/dev/null || true
 
-# 4. cut to [ready - 0.5 s, end] and encode
-START=$(python3 -c "import sys; print(max(0.0, float(sys.argv[1]) - float(sys.argv[2]) - 0.5))" "$READY" "$REC0")
-LEN=$(python3 -c "print($PRE_ROLL + $SECS + $TAIL + 0.5)")
+# 4. cut to [ready + 0.3 s, end] (drops the last loading-screen frames; the server pre-roll starts ~0.7 s before ready) and encode
+START=$(python3 -c "import sys; print(max(0.0, float(sys.argv[1]) - float(sys.argv[2]) + 0.3))" "$READY" "$REC0")
+LEN=$(python3 -c "print($PRE_ROLL + $SECS + $TAIL - 0.3)")
 ffmpeg -loglevel warning -y -ss "$START" -i "$OUT/raw.mkv" -t "$LEN" -r 30 -c:v libx264 -preset medium -crf "$CRF" \
   -pix_fmt yuv420p -movflags +faststart "$OUT/clip.mp4" || fail "encode failed"
 rm -f "$OUT/raw.mkv"
