@@ -6,3 +6,4 @@ bot/node_modules/
 *.age
 *key*.txt
 *.key
+__pycache__/
