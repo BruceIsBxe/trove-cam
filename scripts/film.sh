@@ -42,7 +42,14 @@ cleanup() {
   for p in "${PIDS[@]}"; do kill -9 "$p" 2>/dev/null || true; done
 }
 trap cleanup EXIT
-fail() { say "FAILED: $1"; shot fail; echo "$1" > "$OUT/failure.txt"; exit 1; }
+fail() {
+  local why=$1 disc
+  # the client's own disconnect line (e.g. the server's kick reason), if any, goes into the encrypted bundle only
+  disc=$(grep -aiE "disconnect|kicked" "$CLIENT_LOG" 2>/dev/null | tail -1 | sed -E 's/^[0-9TZ:.-]+ +[A-Z]+ +//' | cut -c1-160)
+  say "FAILED: $why"; shot fail
+  { echo "$why"; [ -n "$disc" ] && echo "client: $disc"; } > "$OUT/failure.txt"
+  exit 1
+}
 
 say "runner: $(nproc) vCPU, ${W}x${H}, clip ${SECS}s"
 rm -f "$CLIENT_LOG"
