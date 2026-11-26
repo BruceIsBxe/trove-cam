@@ -90,8 +90,10 @@ jobs:
           PHPBIN="$PM_DIR/bin/php7/bin/php"
           # PocketMine's installer points php.ini at the extension dir; do the same
           EXT_DIR=$(find "$PM_DIR/bin" -type d -name "*debug-zts*" | head -1)
-          if [ -n "$EXT_DIR" ] && [ -f "$PM_DIR/bin/php7/bin/php.ini" ]; then
-            sed -i "s#^extension_dir=.*#extension_dir=\"$EXT_DIR\"#" "$PM_DIR/bin/php7/bin/php.ini"
+          INI="$PM_DIR/bin/php7/bin/php.ini"
+          if [ -n "$EXT_DIR" ] && [ -f "$INI" ]; then
+            sed -i '/^extension_dir=/d' "$INI"
+            echo "extension_dir=\"$EXT_DIR\"" >> "$INI"
           fi
           "$PHPBIN" -v
           "$PHPBIN" -m | tr '\n' ' '; echo
