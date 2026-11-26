@@ -1,4 +1,8 @@
 out/
+enc/
 bot/node_modules/
 *.phar
 *.mp4
+*.age
+*key*.txt
+*.key

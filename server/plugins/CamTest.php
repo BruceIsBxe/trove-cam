@@ -5,7 +5,7 @@
  * @main CamTest\Main
  * @version 0.1.0
  * @api 5.0.0
- * @description trove-cam feasibility scene: places the camera player and two sparring NPCs in front of it.
+ * @description Camera test scene: places the camera player and two sparring NPCs in front of it.
  */
 
 declare(strict_types=1);
@@ -104,6 +104,7 @@ class Fighter extends Human implements NeverSavedWithChunkEntity{
 
 class Main extends PluginBase implements Listener{
 	private bool $sceneBuilt = false;
+	private string $cameraName = "CamTest";
 	/** @var Fighter[] */
 	private array $fighters = [];
 	/** @var TaskHandler[] */
@@ -113,6 +114,7 @@ class Main extends PluginBase implements Listener{
 		$this->getServer()->getPluginManager()->registerEvents($this, $this);
 		$speed = (float) (getenv("CAMTEST_SPEED") ?: "1");
 		Fighter::$speed = $speed > 0.01 && $speed <= 1.0 ? $speed : 1.0;
+		$this->cameraName = getenv("CAMTEST_CAMERA") ?: "CamTest";
 		$world = $this->getServer()->getWorldManager()->getDefaultWorld();
 		if($world !== null){
 			$world->setTime(6000);
@@ -153,7 +155,7 @@ class Main extends PluginBase implements Listener{
 		$world = $player->getWorld();
 		$spawn = $world->getSafeSpawn();
 		$base = new Vector3($spawn->getFloorX() + 0.5, $spawn->getFloorY(), $spawn->getFloorZ() + 0.5);
-		if($player->getName() === "TroveCam"){
+		if($player->getName() === $this->cameraName){
 			$player->setGamemode(GameMode::CREATIVE);
 			// yaw 0 faces +Z (south); a slight downward pitch frames the fighters
 			$player->teleport($base, 0.0, 10.0);

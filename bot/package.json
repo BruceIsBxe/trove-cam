@@ -1,8 +1,8 @@
 {
-  "name": "trove-cam-bot",
+  "name": "cam-test-bot",
   "private": true,
   "type": "module",
-  "description": "Offline second player for the trove-cam test (bedrock-protocol)",
+  "description": "Offline second player for the cam-test run (bedrock-protocol)",
   "dependencies": {
     "bedrock-protocol": "3.61.0"
   }

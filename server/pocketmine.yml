@@ -1,4 +1,4 @@
-# Minimal config for the throwaway trove-cam test server; every other key uses PocketMine's defaults.
+# Minimal config for the throwaway cam-test server; every other key uses PocketMine's defaults.
 settings:
   # the NG fork has no releases: every source build reports itself as a dev build
   enable-dev-builds: true

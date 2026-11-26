@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Second player for the trove-cam test: joins the throwaway runner server offline (bedrock-protocol),
+// Second player for the cam-test run: joins the throwaway runner server offline (bedrock-protocol),
 // stays connected for --seconds, and logs join/spawn. The CamTest plugin places it and swings its arm
 // server-side, so the camera films a real network player as well as the two NPC fighters.
 //
