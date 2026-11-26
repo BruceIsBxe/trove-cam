@@ -13,6 +13,10 @@ BACKEND=${BACKEND:-vulkan}
 SETUP_TIMEOUT=${SETUP_TIMEOUT:-1500}
 CAPTURE_FPS=${CAPTURE_FPS:-30}
 CRF=${CRF:-28}
+SPEED=${SPEED:-1}          # scene speed on the server; <1 = slow motion, sped back up in the video
+REC=$(python3 -c "import math,sys; print(math.ceil(float(sys.argv[1])/float(sys.argv[2])))" "$SECS" "$SPEED")
+CLIENT_LOG="$HOME/.local/share/cinnabar/logs/client.log"
+lastframe() { grep -aoE "CINNABAR_SLOW_FRAME frame=[0-9]+" "$CLIENT_LOG" 2>/dev/null | tail -1 | grep -oE "[0-9]+$" || echo 0; }
 PM_DIR=${PM_DIR:?PM_DIR}
 CINNABAR=${CINNABAR:?CINNABAR}
 OUT=${OUT:-$PWD/out}
@@ -37,7 +41,7 @@ nproc > "$OUT/nproc.txt"; lscpu > "$OUT/lscpu.txt" 2>&1; free -m > "$OUT/free.tx
 
 # ---- 1. server -------------------------------------------------------------------------------
 log "starting PocketMine-MP"
-( cd "$PM_DIR" && exec ./bin/php7/bin/php PocketMine-MP.phar --no-wizard --disable-ansi ) > "$OUT/server.log" 2>&1 &
+( cd "$PM_DIR" && export CAMTEST_SPEED="$SPEED" && exec ./bin/php7/bin/php PocketMine-MP.phar --no-wizard --disable-ansi ) > "$OUT/server.log" 2>&1 &
 SERVER_PID=$!; PIDS+=("$SERVER_PID")
 for i in $(seq 1 180); do
   grep -q "Done (" "$OUT/server.log" && break
@@ -109,36 +113,44 @@ if [ -n "$WIN" ]; then
   xdotool windowfocus "$WIN" 2>/dev/null || true
 fi
 sleep 10   # chunks, skins, the bot's arrival
+F_PRE=$(lastframe); sleep 5; F_PRE2=$(lastframe); echo "idle_frames_5s=$((F_PRE2 - F_PRE))" >> "$OUT/marks.env"
 shot "before-record"
 xdotool key F3 2>/dev/null || true   # debug overlay (FPS) for the first half
 sleep 1
 mark record_start
-log "recording ${SECS}s at ${CAPTURE_FPS} fps"
+F0=$(lastframe); RT0=$(date +%s.%N)
+log "recording ${REC}s of real time (scene speed $SPEED -> ${SECS}s clip) at ${CAPTURE_FPS} fps"
 ffmpeg -loglevel warning -y -f x11grab -draw_mouse 0 -framerate "$CAPTURE_FPS" -video_size "${W}x${H}" -i "$DISP" \
-  -t "$SECS" -c:v libx264 -preset ultrafast -crf 16 -pix_fmt yuv420p "$OUT/raw.mp4" > "$OUT/ffmpeg-record.log" 2>&1 &
+  -t "$REC" -c:v libx264 -preset ultrafast -crf 16 -pix_fmt yuv420p "$OUT/raw.mp4" > "$OUT/ffmpeg-record.log" 2>&1 &
 FF_PID=$!
-sleep $((SECS / 2))
+sleep $((REC / 2))
 xdotool key F3 2>/dev/null || true   # overlay off
 xdotool key F1 2>/dev/null || true   # HUD off: the clean "replay camera" look
 log "toggled F3 off, F1 (hide HUD) on"
 wait "$FF_PID"; log "recording done (ffmpeg $?)"
+F1=$(lastframe); RT1=$(date +%s.%N)
+python3 -c "import sys; f0,f1,t0,t1=map(float,sys.argv[1:]); print('client_frames=%d' % (f1-f0)); print('client_fps_x100=%d' % round(100*(f1-f0)/(t1-t0)))" "$F0" "$F1" "$RT0" "$RT1" >> "$OUT/marks.env"
 mark record_end
 shot "after-record"
 alive=0; kill -0 "$CIN_PID" 2>/dev/null && alive=1
 
 # ---- 6. encode + measure ---------------------------------------------------------------------
-ffmpeg -loglevel warning -y -i "$OUT/raw.mp4" -c:v libx264 -preset slow -crf "$CRF" -pix_fmt yuv420p -movflags +faststart "$OUT/clip.mp4"
+VF="null"; [ "$SPEED" != 1 ] && VF="setpts=${SPEED}*PTS"
+ffmpeg -loglevel warning -y -i "$OUT/raw.mp4" -vf "$VF" -r 30 -c:v libx264 -preset slow -crf "$CRF" -pix_fmt yuv420p -movflags +faststart "$OUT/clip.mp4"
 mark encoded
 ffmpeg -loglevel error -y -i "$OUT/clip.mp4" -vf "fps=1/4" "$OUT/frames/frame-%02d.png" || true
 # distinct frames: what the client actually presented (capture is capped at CAPTURE_FPS)
 UNIQUE=$(ffmpeg -i "$OUT/raw.mp4" -vf "mpdecimate=hi=64:lo=64:frac=0,showinfo" -an -f null - 2>&1 | grep -c "Parsed_showinfo.*n:" || true)
 TOTAL=$(ffmpeg -i "$OUT/raw.mp4" -vf showinfo -an -f null - 2>&1 | grep -c "Parsed_showinfo.*n:" || true)
+{ du -sh "$HOME"/.cache/* "$HOME"/.local/share/cinnabar/* "$HOME"/.config/cinnabar 2>/dev/null; ls -la "$HOME/.config/cinnabar" 2>/dev/null; } > "$OUT/dirs.txt"
+cp -r "$HOME/.config/cinnabar" "$OUT/cinnabar-config" 2>/dev/null || true
 cp -r "$HOME/.local/share/cinnabar/logs" "$OUT/cinnabar-logs" 2>/dev/null || true
 grep -iE "fps|frame" "$OUT/cinnabar.log" | tail -40 > "$OUT/cinnabar-fps-lines.txt" || true
 
-python3 - "$OUT" "$SECS" "$UNIQUE" "$TOTAL" "$alive" "$BACKEND" "$CAPTURE_FPS" <<'PY'
+python3 - "$OUT" "$SECS" "$UNIQUE" "$TOTAL" "$alive" "$BACKEND" "$CAPTURE_FPS" "$SPEED" "$REC" <<'PY'
 import json, os, re, sys
-out, secs, unique, total, alive, backend, cap = sys.argv[1:]
+out, secs, unique, total, alive, backend, cap, speed, rec = sys.argv[1:]
+speed = float(speed); rec = float(rec)
 secs = float(secs); unique = int(unique or 0); total = int(total or 0)
 marks = {}
 for line in open(os.path.join(out, "marks.env")):
@@ -147,7 +159,7 @@ cpu = {}
 try:
     for line in open(os.path.join(out, "pidstat.log")):
         parts = line.split()
-        if len(parts) < 10 or parts[0].startswith("#") or not parts[0].isdigit():
+        if len(parts) < 10 or parts[0].startswith("#") or not parts[2].isdigit():
             continue
         # Time UID PID %usr %system %guest %wait %CPU CPU Command...
         try:
@@ -172,7 +184,12 @@ summary = {
     "capture_fps": int(cap),
     "captured_frames": total,
     "distinct_frames": unique,
-    "distinct_fps": round(unique / secs, 2) if secs else None,
+    "scene_speed": speed,
+    "real_seconds_recorded": rec,
+    "distinct_fps_real_time": round(unique / rec, 2) if rec else None,
+    "client_fps_real_time": marks.get("client_fps_x100", 0) / 100,
+    "client_idle_fps_before_record": marks.get("idle_frames_5s", 0) / 5,
+    "effective_clip_fps": round(min(30, marks.get("client_fps_x100", 0) / 100 / speed), 1),
     "cinnabar_alive_after_record": alive == "1",
     "marks_seconds_from_script_start": marks,
     "clip_bytes": os.path.getsize(os.path.join(out, "clip.mp4")) if os.path.exists(os.path.join(out, "clip.mp4")) else None,

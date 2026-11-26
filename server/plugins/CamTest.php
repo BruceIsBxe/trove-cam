@@ -46,33 +46,47 @@ class Fighter extends Human implements NeverSavedWithChunkEntity{
 	public float $phase = 0.0;
 	public int $hitEvery = 9;
 	public int $hitOffset = 0;
-	private int $age = 0;
+	/** Scene time per server tick: 1 = real time, 0.25 = quarter-speed (the recorder speeds the video back up). */
+	public static float $speed = 1.0;
+	private float $t = 0.0;
+	private int $lastHit = -1;
 
 	public function onUpdate(int $currentTick) : bool{
 		if($this->closed){
 			return false;
 		}
-		$this->age++;
-		$t = $this->age;
+		$speed = self::$speed;
+		$this->t += $speed;
+		$t = $this->t;
 		$angle = $this->phase + $t * 0.035;
-		$radius = 1.35 + 0.45 * sin($t * 0.11 + $this->phase);
+		$radius = 1.15 + 0.35 * sin($t * 0.11 + $this->phase);
 		$tx = $this->centre->x + cos($angle) * $radius;
 		$tz = $this->centre->z + sin($angle) * $radius;
 		$dx = $tx - $this->location->x;
 		$dz = $tz - $this->location->z;
 		$len = sqrt($dx * $dx + $dz * $dz);
-		if($len > 0.3){
-			$dx *= 0.3 / $len;
-			$dz *= 0.3 / $len;
+		$max = 0.3 * $speed;
+		if($len > $max){
+			$dx *= $max / $len;
+			$dz *= $max / $len;
 		}
 		$this->move($dx, 0.0, $dz);
-		if($this->onGround && ($t + (int) ($this->phase * 10)) % 53 === 0){
+		// jumps and knockback use PocketMine's physics, which runs at real time: only at full speed
+		if($speed >= 1.0 && $this->onGround && ((int) $t + (int) ($this->phase * 10)) % 53 === 0){
 			$this->setMotion(new Vector3(0, 0.42, 0));
 		}
 		$foe = $this->foe;
+		$hitIndex = (int) floor(($t - $this->hitOffset) / $this->hitEvery);
+		$hitNow = $hitIndex !== $this->lastHit && $t >= $this->hitOffset;
+		if($hitNow){
+			$this->lastHit = $hitIndex;
+		}
 		if($foe !== null && !$foe->isClosed()){
 			$this->lookAt($foe->getEyePos());
-			if($t % $this->hitEvery === $this->hitOffset){
+			if($hitNow && $speed < 1.0){
+				$this->broadcastAnimation(new ArmSwingAnimation($this));
+				$foe->broadcastAnimation(new HurtAnimation($foe));
+			}elseif($hitNow){
 				$this->broadcastAnimation(new ArmSwingAnimation($this));
 				$foe->broadcastAnimation(new HurtAnimation($foe));
 				$push = $foe->getPosition()->subtractVector($this->getPosition());
@@ -97,12 +111,14 @@ class Main extends PluginBase implements Listener{
 
 	protected function onEnable() : void{
 		$this->getServer()->getPluginManager()->registerEvents($this, $this);
+		$speed = (float) (getenv("CAMTEST_SPEED") ?: "1");
+		Fighter::$speed = $speed > 0.01 && $speed <= 1.0 ? $speed : 1.0;
 		$world = $this->getServer()->getWorldManager()->getDefaultWorld();
 		if($world !== null){
 			$world->setTime(6000);
 			$world->stopTime();
 		}
-		$this->getLogger()->info("CAMTEST enabled");
+		$this->getLogger()->info("CAMTEST enabled speed=" . Fighter::$speed);
 	}
 
 	public function onJoin(PlayerJoinEvent $event) : void{
@@ -151,7 +167,7 @@ class Main extends PluginBase implements Listener{
 				if($player->isOnline()){
 					$player->broadcastAnimation(new ArmSwingAnimation($player));
 				}
-			}), 14);
+			}), max(1, (int) round(14 / Fighter::$speed)));
 			$this->getLogger()->info("CAMTEST bot placed name=" . $player->getName());
 		}
 	}
@@ -179,7 +195,7 @@ class Main extends PluginBase implements Listener{
 			}
 		}
 		$skin = $camera->getSkin();
-		$centre = new Vector3($base->x, $base->y, $base->z + 4.5);
+		$centre = new Vector3($base->x, $base->y, $base->z + 5.5);
 		$red = $this->makeFighter($world, $centre->add(-1.3, 0, 0), self::tinted($skin, "camtest_red", 330, 170, 170), "Red", $centre, 0.0, 0);
 		$blue = $this->makeFighter($world, $centre->add(1.3, 0, 0), self::tinted($skin, "camtest_blue", 170, 190, 340), "Blue", $centre, 3.14159, 4);
 		$red->foe = $blue;

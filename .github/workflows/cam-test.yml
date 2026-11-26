@@ -19,6 +19,9 @@ on:
         default: "720"
       capture_fps:
         default: "30"
+      speed:
+        description: Scene speed on the server (0.25 = quarter-speed slow motion, sped back up in the clip)
+        default: "1"
       cinnabar_tag:
         description: Cinnabar release tag (cinnabar-mc/cinnabar)
         default: v0.2.1
@@ -78,6 +81,16 @@ jobs:
           path: ~/.local/share/cinnabar
           key: cinnabar-data-${{ inputs.cinnabar_tag }}-v1
 
+      - name: Cache shader caches (Mesa llvmpipe/lavapipe + Cinnabar)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/mesa_shader_cache
+            ~/.cache/mesa_shader_cache_db
+            ~/.cache/cinnabar
+          key: shaders-${{ inputs.cinnabar_tag }}-${{ inputs.backend }}-${{ github.run_id }}
+          restore-keys: shaders-${{ inputs.cinnabar_tag }}-${{ inputs.backend }}-
+
       - name: PocketMine-MP (NG fork phar from this repo's release, Axolotl PHP 8.4)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -111,6 +124,7 @@ jobs:
           HEIGHT: ${{ inputs.height }}
           BACKEND: ${{ inputs.backend }}
           CAPTURE_FPS: ${{ inputs.capture_fps }}
+          SPEED: ${{ inputs.speed }}
           CINNABAR: /home/runner/tools/cinnabar/squashfs-root/AppRun
           OUT: ${{ github.workspace }}/out
         run: bash scripts/run.sh
