@@ -1,0 +1,142 @@
+name: cam-test
+
+# Phase 1 feasibility: can a free GitHub runner (4 vCPU, no GPU) render a Bedrock client (Cinnabar) in
+# software, join a throwaway PocketMine-MP (NG) server on 127.0.0.1, and record a clip?
+# Nothing here talks to the live Trove Prisons server.
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_seconds:
+        description: Seconds to record
+        default: "20"
+      backend:
+        description: wgpu backend (vulkan = lavapipe, gl = llvmpipe)
+        default: vulkan
+      width:
+        default: "1280"
+      height:
+        default: "720"
+      capture_fps:
+        default: "30"
+      cinnabar_tag:
+        description: Cinnabar release tag (cinnabar-mc/cinnabar)
+        default: v0.2.1
+
+permissions:
+  contents: read
+
+env:
+  PHAR_TAG: pm-ng-eaa2e581
+  PHP_URL: https://github.com/axolotl-pm/PHP-Binaries/releases/download/pm5-php-8.4-latest/PHP-8.4-Linux-x86_64-PM5.tar.gz
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Job start
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: System packages (Xvfb, Mesa lavapipe/llvmpipe, ffmpeg)
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            xvfb xdotool x11-utils mesa-utils mesa-vulkan-drivers libvulkan1 vulkan-tools \
+            libgl1-mesa-dri libegl1 libegl-mesa0 libgles2 libgbm1 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 libx11-xcb1 libxcb-shape0 libxcb-xfixes0 \
+            libasound2t64 libudev1 libwayland-client0 libwayland-cursor0 libwayland-egl1 libfontconfig1 \
+            ffmpeg sysstat
+          ls /usr/share/vulkan/icd.d/
+
+      - name: Cache Cinnabar app
+        id: cache-app
+        uses: actions/cache@v4
+        with:
+          path: ~/tools/cinnabar
+          key: cinnabar-app-${{ inputs.cinnabar_tag }}
+
+      - name: Download Cinnabar
+        if: steps.cache-app.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/tools/cinnabar && cd ~/tools/cinnabar
+          base=https://github.com/cinnabar-mc/cinnabar/releases/download/${{ inputs.cinnabar_tag }}
+          curl -fsSL -o Cinnabar-x86_64.AppImage "$base/Cinnabar-x86_64.AppImage"
+          curl -fsSL -o SHA256SUMS.txt "$base/SHA256SUMS.txt"
+          grep ' Cinnabar-x86_64.AppImage$' SHA256SUMS.txt | sha256sum -c -
+          chmod +x Cinnabar-x86_64.AppImage
+          ./Cinnabar-x86_64.AppImage --appimage-extract > /dev/null
+          rm Cinnabar-x86_64.AppImage
+          ls squashfs-root squashfs-root/usr/bin
+
+      - name: Cache Cinnabar prepared assets (Mojang pack, converted on first run)
+        id: cache-data
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cinnabar
+          key: cinnabar-data-${{ inputs.cinnabar_tag }}-v1
+
+      - name: PocketMine-MP (NG fork phar from this repo's release, Axolotl PHP 8.4)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PM_DIR="$RUNNER_TEMP/pm"; mkdir -p "$PM_DIR"
+          cp -r server/. "$PM_DIR/"
+          gh release download "$PHAR_TAG" -R "$GITHUB_REPOSITORY" -p PocketMine-MP.phar -D "$PM_DIR"
+          sha256sum "$PM_DIR/PocketMine-MP.phar"
+          curl -fsSL "$PHP_URL" | tar -xz -C "$PM_DIR"
+          PHPBIN="$PM_DIR/bin/php7/bin/php"
+          # PocketMine's installer points php.ini at the extension dir; do the same
+          EXT_DIR=$(find "$PM_DIR/bin" -type d -name "*debug-zts*" | head -1)
+          if [ -n "$EXT_DIR" ] && [ -f "$PM_DIR/bin/php7/bin/php.ini" ]; then
+            sed -i "s#^extension_dir=.*#extension_dir=\"$EXT_DIR\"#" "$PM_DIR/bin/php7/bin/php.ini"
+          fi
+          "$PHPBIN" -v
+          "$PHPBIN" -m | tr '\n' ' '; echo
+          echo "PM_DIR=$PM_DIR" >> "$GITHUB_ENV"
+
+      - name: Bot (bedrock-protocol)
+        continue-on-error: true
+        working-directory: bot
+        run: npm install --no-audit --no-fund
+
+      - name: Run camera test
+        env:
+          RECORD_SECONDS: ${{ inputs.record_seconds }}
+          WIDTH: ${{ inputs.width }}
+          HEIGHT: ${{ inputs.height }}
+          BACKEND: ${{ inputs.backend }}
+          CAPTURE_FPS: ${{ inputs.capture_fps }}
+          CINNABAR: /home/runner/tools/cinnabar/squashfs-root/AppRun
+          OUT: ${{ github.workspace }}/out
+        run: bash scripts/run.sh
+
+      - name: Job time
+        if: always()
+        run: |
+          mkdir -p out
+          echo "job_seconds_before_upload=$(( $(date +%s) - JOB_T0 ))" | tee out/job-time.txt
+          rm -rf ~/.local/share/cinnabar/logs ~/.local/share/cinnabar/run ~/.local/share/cinnabar/crashes
+          du -sh ~/.local/share/cinnabar/* 2>/dev/null || true
+
+      - name: Upload clip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clip
+          path: out/clip.mp4
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload logs and stats
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            out/
+            !out/raw.mp4
+            !out/clip.mp4
+          retention-days: 7

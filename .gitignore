@@ -1,0 +1,4 @@
+out/
+bot/node_modules/
+*.phar
+*.mp4
