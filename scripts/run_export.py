@@ -79,9 +79,30 @@ def lazy_objects(mclocal, mc: Path) -> None:
     mclocal.asset_bytes = asset_bytes
 
 
+def numpy_json() -> None:
+    """export_viewer.py (cliprender v2.7) writes clip.json with json.dumps; on a run that extracts the region from --world-db
+    (always the case here: the runner starts with an empty cache) some values are numpy integers and json.dumps stops with
+    "Object of type int64 is not JSON serializable" (a cached region loads them as plain ints, so the PC never saw it).
+    Until that is fixed in cliprender, numpy scalars / arrays are written as the plain numbers they are."""
+    original = json.JSONEncoder.default
+
+    def default(self, o):
+        import numpy as np
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        return original(self, o)
+
+    json.JSONEncoder.default = default
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         raise SystemExit("usage: run_export.py <kit dir> <export_viewer.py args...>")
+    numpy_json()
     kit = Path(argv[0]).resolve()
     mc = Path(os.environ["MINECRAFT_DIR"]).resolve()
     prepare(mc)
