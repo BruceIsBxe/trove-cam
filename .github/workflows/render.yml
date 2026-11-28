@@ -90,16 +90,22 @@ jobs:
       - name: Render
         env:
           MINECRAFT_DIR: ${{ runner.temp }}/mojang
+          # CPU settings for Mesa llvmpipe (scripts/run_render.py DEFAULTS has the measurements)
+          RENDER_SET: ${{ vars.RENDER_SET || 'fps=30 msaa=4 shadow=4096' }}
         run: |
           T0=$(date +%s)
           mkdir -p out/result
           RUN=()
           [ "${CLIPRENDER_GL_BACKEND:-}" = egl ] || RUN=(xvfb-run -a -s "-screen 0 1280x720x24")
-          if "${RUN[@]}" python3 scripts/run_render.py work/kit --clip work/clip/clip.json.gz --skins work/clip/skins \
-              --world-db work/world/db --cache work/cache --out out/result --tmp work/tmp --opts work/clip/render.json \
-              > out/log/render.log 2>&1 && [ -s out/result/clip.mp4 ] && [ -f out/result/meta.json ]; then
+          SETS=(); for s in $RENDER_SET; do SETS+=(--set "$s"); done
+          set -o pipefail
+          # the full output (names, coordinates) goes to the encrypted log; only frame counters and seconds are shown here
+          if "${RUN[@]}" python3 -u scripts/run_render.py work/kit --clip work/clip/clip.json.gz --skins work/clip/skins \
+              --world-db work/world/db --cache work/cache --out out/result --tmp work/tmp --opts work/clip/render.json "${SETS[@]}" 2>&1 \
+              | tee out/log/render.log | { grep --line-buffered -oE '^\[cliprender\] (frame [0-9]+/[0-9]+ \([0-9]+s\)|meshed [0-9]+ sections \([0-9.]+s\))' || true; } \
+              && [ -s out/result/clip.mp4 ] && [ -f out/result/meta.json ]; then
             cp work/tmp/render.coverage.json out/log/ 2>/dev/null || true
-            python3 -c "import json,sys; m=json.load(open('out/result/meta.json')); print('render ok:', ', '.join(f'{k} {m[k]}' for k in ('bytes','seconds','width','height','view','passes','render_s','encode_s','gl') if k in m))"
+            python3 -c "import json,sys; m=json.load(open('out/result/meta.json')); print('render ok:', ', '.join(f'{k} {m[k]}' for k in ('bytes','seconds','width','height','view','fps','msaa','shadow','passes','render_s','encode_s','gl') if k in m))"
             echo "total $(( $(date +%s) - T0 )) s"
           else
             echo "render failed" | tee out/log/failure.txt

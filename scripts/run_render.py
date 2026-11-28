@@ -15,7 +15,8 @@ the renderer itself. Nothing fetched here is cached by Actions or leaves the run
 
 render.json (optional, inside the encrypted clip input, written by the bot):
   {"view": "auto" | "split" | "server" | "player", "viewOf": <player name or null>, "maxMb": 9.0,
-   "size": "1280x720", "fps": 30, "msaa": 4}
+   "size": "1280x720", "fps": 30, "msaa": 4, "shadow": 4096, "end": <seconds, tests only>}
+  --set key=value (the workflow's CPU settings) wins over render.json.
   auto = SERVER | <viewOf>'s view side by side when the clip has two or more players, else the server view alone.
 
 PRIVACY: the renderer's own output (player names, coordinates) is printed here; the workflow sends this script's output
@@ -43,6 +44,9 @@ AUDIO_KBPS = 96
 MUX_KBPS = 8  # mp4 container overhead, generous for these lengths
 MAX_VKBPS = 4000  # a short clip does not need more than this at 720p30
 MIN_VKBPS = 300
+# CPU (Mesa llvmpipe) budget: cliprender's GPU defaults (30 fps here, MSAA 4, a 4096 shadow map drawn per view per frame)
+# took 0.95 s a frame on a GitHub runner = 28 min for a 60 s split clip (selftest 2026-11-28, run timed out).
+DEFAULTS = {"fps": 30, "msaa": 4, "shadow": 4096}
 
 
 def probe() -> int:
@@ -82,13 +86,27 @@ def clean_opts(raw: object, names: list[str]) -> dict:
     w, h = (int(v) for v in size.split("x"))
     if not (320 <= w <= 1920 and 240 <= h <= 1080) or w % 4 or h % 2:
         size = "1280x720"
-    fps = o.get("fps") if o.get("fps") in (20, 24, 25, 30, 60) else 30
-    msaa = o.get("msaa") if o.get("msaa") in (0, 1, 2, 4, 8) else 4
+    fps = o.get("fps") if o.get("fps") in (20, 24, 25, 30, 60) else DEFAULTS["fps"]
+    msaa = o.get("msaa") if o.get("msaa") in (0, 1, 2, 4, 8) else DEFAULTS["msaa"]
+    shadow = o.get("shadow") if o.get("shadow") in (512, 1024, 2048, 4096) else DEFAULTS["shadow"]
+    end = o.get("end") if isinstance(o.get("end"), (int, float)) and 0 < o.get("end") <= 600 else None
     if view == "auto":
         view = "split" if len(names) >= 2 else "server"
     if view == "split" and len(names) < 2:
         view = "server"
-    return {"view": view, "viewOf": view_of, "maxMb": max_mb, "size": size, "fps": fps, "msaa": msaa}
+    return {"view": view, "viewOf": view_of, "maxMb": max_mb, "size": size, "fps": fps, "msaa": msaa, "shadow": shadow, "end": end}
+
+
+def parse_sets(items: list[str]) -> dict:
+    """--set key=value (numbers as numbers) -> dict; the workflow's choices win over render.json. Pure."""
+    out = {}
+    for it in items or []:
+        k, _, v = it.partition("=")
+        try:
+            out[k.strip()] = int(v) if re.fullmatch(r"-?\d+", v.strip()) else float(v) if re.fullmatch(r"-?\d+\.\d*", v.strip()) else v.strip()
+        except ValueError:
+            continue
+    return out
 
 
 def video_kbps(seconds: float, max_mb: float) -> int:
@@ -167,6 +185,7 @@ def render(argv: list[str]) -> int:
     ap.add_argument("--tmp", required=True)
     ap.add_argument("--opts", default=None)
     ap.add_argument("--max-mb", type=float, default=None)
+    ap.add_argument("--set", action="append", default=[], help="key=value over render.json (fps, msaa, shadow, size, end, view)")
     a = ap.parse_args(argv)
     import run_export  # the same Mojang asset path as the bundle job
     run_export.numpy_json()
@@ -181,10 +200,11 @@ def render(argv: list[str]) -> int:
             raw = json.loads(Path(a.opts).read_text(encoding="utf-8"))
         except ValueError:
             raw = {}
-    o = clean_opts(raw, names)
+    o = clean_opts({**(raw if isinstance(raw, dict) else {}), **parse_sets(a.set)}, names)
     if a.max_mb:
         o["maxMb"] = min(24.0, max(1.0, a.max_mb))
-    print(f"render: {len(names)} players, view {o['view']}{' of ' + o['viewOf'] if o['viewOf'] else ''}, {o['size']} @ {o['fps']}, msaa {o['msaa']}", flush=True)
+    print(f"render: {len(names)} players, view {o['view']}{' of ' + o['viewOf'] if o['viewOf'] else ''}, {o['size']} @ {o['fps']}, "
+          f"msaa {o['msaa']}, shadow {o['shadow']}{', end ' + str(o['end']) + ' s' if o['end'] else ''}", flush=True)
     mc = Path(os.environ["MINECRAFT_DIR"]).resolve()
     run_export.prepare(mc)
     tool = kit / "tools" / "cliprender"
@@ -197,6 +217,10 @@ def render(argv: list[str]) -> int:
     spec = importlib.util.spec_from_file_location("render_clip", tool / "render_clip.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    from cliprender import renderer  # noqa: E402 (from the kit): render_clip.py passes no shadow size, so set the default
+    d = list(renderer.Renderer.__init__.__defaults__ or ())
+    if len(d) == 2:  # (samples, shadow_size)
+        renderer.Renderer.__init__.__defaults__ = (d[0], o["shadow"])
     raw_mp4 = tmp / "render.mp4"
     args = ["--clip", a.clip, "--skins", a.skins, "--world-db", a.world_db, "--cache", a.cache, "--out", str(raw_mp4),
             "--fps", str(o["fps"]), "--size", o["size"], "--msaa", str(o["msaa"]), "--crf", "16", "--preset", "veryfast",
@@ -207,6 +231,8 @@ def render(argv: list[str]) -> int:
         args += ["--view", "player"]
     if o["viewOf"] and o["view"] in ("split", "player"):
         args += ["--view-of", o["viewOf"]]
+    if o["end"]:
+        args += ["--end", str(o["end"])]
     sys.argv = ["render_clip.py", *args]
     t0 = time.time()
     mod.main()
@@ -218,7 +244,7 @@ def render(argv: list[str]) -> int:
     t1 = time.time()
     enc = fit(ff, raw_mp4, out / "clip.mp4", tmp, o["maxMb"], w, h, o["fps"])
     encode_s = time.time() - t1
-    meta = {"bytes": (out / "clip.mp4").stat().st_size, **enc, "view": o["view"], "fps": o["fps"],
+    meta = {"bytes": (out / "clip.mp4").stat().st_size, **enc, "view": o["view"], "fps": o["fps"], "msaa": o["msaa"], "shadow": o["shadow"],
             "render_s": round(render_s, 1), "encode_s": round(encode_s, 1), "gl": gl_name()}
     (out / "meta.json").write_text(json.dumps(meta) + "\n", encoding="utf-8")
     print(f"render: done {json.dumps(meta)}", flush=True)
