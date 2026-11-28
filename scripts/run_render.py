@@ -15,7 +15,7 @@ the renderer itself. Nothing fetched here is cached by Actions or leaves the run
 
 render.json (optional, inside the encrypted clip input, written by the bot):
   {"view": "auto" | "split" | "server" | "player", "viewOf": <player name or null>, "maxMb": 9.0,
-   "size": "1280x720", "fps": 30, "msaa": 4, "shadow": 4096, "end": <seconds, tests only>}
+   "size": "1280x720", "fps": 30, "msaa": 4, "shadow": 1024, "end": <seconds, tests only>}
   --set key=value (the workflow's CPU settings) wins over render.json.
   auto = SERVER | <viewOf>'s view side by side when the clip has two or more players, else the server view alone.
 
@@ -44,9 +44,12 @@ AUDIO_KBPS = 96
 MUX_KBPS = 8  # mp4 container overhead, generous for these lengths
 MAX_VKBPS = 4000  # a short clip does not need more than this at 720p30
 MIN_VKBPS = 300
-# CPU (Mesa llvmpipe) budget: cliprender's GPU defaults (30 fps here, MSAA 4, a 4096 shadow map drawn per view per frame)
-# took 0.95 s a frame on a GitHub runner = 28 min for a 60 s split clip (selftest 2026-11-28, run timed out).
-DEFAULTS = {"fps": 30, "msaa": 4, "shadow": 4096}
+# CPU (Mesa llvmpipe, 4 vCPU GitHub runner) budget, measured 2026-11-28 on a 3-player 60 s clip, SERVER | player split at
+# 1280x720 (90-frame bench, s a frame): msaa 4 + shadow 4096 0.84 (cliprender's default map: the full render timed out at
+# 25 min), msaa 4 + 1024 0.43, msaa 2 + 2048 0.53, msaa 2 + 1024 0.43, msaa 0 + 1024 0.26, msaa 0 + 4096 0.64.
+# The shadow map (drawn per view per frame) is the cost; MSAA 4 costs no more than 2. Chosen: msaa 4 + shadow 1024 =
+# full render 730 s + encode 44 s for 60 s (about 6.5 min for a 30 s report clip).
+DEFAULTS = {"fps": 30, "msaa": 4, "shadow": 1024}
 
 
 def probe() -> int:

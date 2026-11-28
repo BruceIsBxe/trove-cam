@@ -31,7 +31,7 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 28
     steps:
       - name: Check inputs
         env:
@@ -91,7 +91,7 @@ jobs:
         env:
           MINECRAFT_DIR: ${{ runner.temp }}/mojang
           # CPU settings for Mesa llvmpipe (scripts/run_render.py DEFAULTS has the measurements)
-          RENDER_SET: ${{ vars.RENDER_SET || 'fps=30 msaa=4 shadow=4096' }}
+          RENDER_SET: ${{ vars.RENDER_SET || 'fps=30 msaa=4 shadow=1024' }}
         run: |
           T0=$(date +%s)
           mkdir -p out/result

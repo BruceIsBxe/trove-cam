@@ -28,7 +28,8 @@ software, join a server, film a short PvP scene and hand back an MP4?
   `render_clip.py`, in the clip kit) instead of a camera client. Same payload, token and inputs as a bundle (the clip
   input also carries `render.json`: the view choice). OpenGL is Mesa llvmpipe through EGL (Xvfb + GLX when EGL has no
   device); `scripts/run_render.py` renders SERVER | the reported player's view side by side (one view when the clip has
-  one player) at 1280x720 30 fps and fits it under 9 MiB with a two-pass encode. The MP4 + sizes go back encrypted to the
+  one player) at 1280x720 30 fps (MSAA 4, a 1024 shadow map: about 13 min for a 60 s clip on llvmpipe) and fits it under 9 MiB with a
+  two-pass encode. The MP4 + sizes go back encrypted to the
   bot (`result-<job>`, 1 day); the bot adds it to the #reports post and deletes the run.
 
 ## Privacy
