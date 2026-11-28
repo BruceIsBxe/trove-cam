@@ -24,6 +24,12 @@ software, join a server, film a short PvP scene and hand back an MP4?
   launcher servers, `scripts/run_export.py`) are fetched at run time and are never cached or uploaded in clear. Results go
   back encrypted to the bot (`result-<job>` artifact, 1 day); the bot deletes the run. `scripts/runner_job.py` opens the
   payload and fetches the inputs.
+- `.github/workflows/render.yml` (2026-11-28): #reports clip videos from the game's own clip renderer (cliprender
+  `render_clip.py`, in the clip kit) instead of a camera client. Same payload, token and inputs as a bundle (the clip
+  input also carries `render.json`: the view choice). OpenGL is Mesa llvmpipe through EGL (Xvfb + GLX when EGL has no
+  device); `scripts/run_render.py` renders SERVER | the reported player's view side by side (one view when the clip has
+  one player) at 1280x720 30 fps and fits it under 9 MiB with a two-pass encode. The MP4 + sizes go back encrypted to the
+  bot (`result-<job>`, 1 day); the bot adds it to the #reports post and deletes the run.
 
 ## Privacy
 Clips and detailed logs are encrypted on the runner with [age](https://age-encryption.org) to the public recipient in

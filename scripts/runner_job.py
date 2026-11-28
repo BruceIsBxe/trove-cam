@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Runner side of the Da Club bot's map / bundle jobs (map.yml, bundle.yml).
+"""Runner side of the Da Club bot's map / bundle / render jobs (map.yml, bundle.yml, render.yml).
 
 PRIVACY: this repository is public, so is the Actions log. This script prints stage words only. The dispatch payload
 (age, to .github/cam-runner-recipient.txt) carries the bot's address and a one-time token; both are masked at once and
 kept in a 0600 file under $RUNNER_TEMP, never in the log or in $GITHUB_ENV.
 
-  runner_job.py open <map|bundle>         decrypt + check the payload, write $RUNNER_TEMP/job.json, export KIT_SHA
+  runner_job.py open <map|bundle|render>  decrypt + check the payload, write $RUNNER_TEMP/job.json, export KIT_SHA
   runner_job.py fetch <name> <dest> [--cache <file>]
                                           GET <base>/runner/v1/input/<name> (Authorization: Bearer <token>), the body is age
                                           to this runner; decrypt, check its sha256 against the payload, write <dest>.
@@ -29,7 +29,7 @@ from pathlib import Path
 
 INPUT_NAME = re.compile(r"[a-z]{2,12}")
 MAX_INPUT = {"kit": 64 << 20, "world": 96 << 20, "clip": 32 << 20}
-KINDS = {"map": {"kit", "world"}, "bundle": {"kit", "world", "clip"}}
+KINDS = {"map": {"kit", "world"}, "bundle": {"kit", "world", "clip"}, "render": {"kit", "world", "clip"}}
 
 
 def die(msg: str) -> None:
