@@ -144,8 +144,19 @@ kill "$CIN_PID" 2>/dev/null || true
 # 4. cut to [ready + 0.3 s, end] (drops the last loading-screen frames; the server pre-roll starts ~0.7 s before ready) and encode
 START=$(python3 -c "import sys; print(max(0.0, float(sys.argv[1]) - float(sys.argv[2]) + 0.3))" "$READY" "$REC0")
 LEN=$(python3 -c "print($PRE_ROLL + $SECS + $TAIL - 0.3)")
-ffmpeg -loglevel warning -y -ss "$START" -i "$OUT/raw.mkv" -t "$LEN" -r 30 -c:v libx264 -preset medium -crf "$CRF" \
-  -pix_fmt yuv420p -c:a aac -b:a 96k -movflags +faststart "$OUT/clip.mp4" || fail "encode failed"
+# Size cap (2026-11-28): the bot attaches the MP4 to Discord only up to 9.5 MiB, and CRF 28 alone made 10-11.5 MB for
+# busy 30-60 s clips (5 of 10 videos were dropped as "too big"). Capped CRF: the quality of CRF 28, but the video bitrate
+# never above what fits MAX_MB (default 9.0 MiB) with the 96k audio; one more pass at 80 % of that if it still came out big.
+MAX_MB=${MAX_MB:-9.0}
+VKBPS=$(python3 -c "import sys; l=float(sys.argv[1]); print(max(250, int(float(sys.argv[2]) * 8 * 1048576 / l / 1000 - 96 - 8)))" "$LEN" "$MAX_MB")
+enc() { ffmpeg -loglevel warning -y -ss "$START" -i "$OUT/raw.mkv" -t "$LEN" -r 30 -c:v libx264 -preset medium -crf "$CRF" \
+  -maxrate "${1}k" -bufsize "$(( $1 * 2 ))k" -pix_fmt yuv420p -c:a aac -b:a 96k -movflags +faststart "$OUT/clip.mp4"; }
+enc "$VKBPS" || fail "encode failed"
+LIMIT=$(python3 -c "import sys; print(int(float(sys.argv[1]) * 1048576))" "$MAX_MB")
+if [ "$(stat -c %s "$OUT/clip.mp4")" -gt "$LIMIT" ]; then
+  log "clip $(stat -c %s "$OUT/clip.mp4") bytes > $LIMIT: second pass at 80 %"
+  enc $(( VKBPS * 8 / 10 )) || fail "encode failed"
+fi
 rm -f "$OUT/raw.mkv"
 mark encoded
 [ -s "$OUT/clip.mp4" ] || fail "empty clip"

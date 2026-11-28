@@ -16,6 +16,14 @@ software, join a server, film a short PvP scene and hand back an MP4?
   `CAM_RUNNER_AGE_IDENTITY` secret). The server address is the `SERVER_ADDR` secret. Output: the MP4 encrypted to
   `.github/bot-recipient.txt` (the Discord bot) and `.github/clip-recipient.txt`, kept 1 day; the bot deletes the run.
 - `.github/workflows/ping.yml`: a RakNet unconnected ping (server-list ping, no join) to an encrypted address.
+- `.github/workflows/map.yml` and `bundle.yml` (2026-11-27): the Trove web admin's live map tiles and 3D clip viewer bundles.
+  The Discord bot dispatches them with a public job id and an age-encrypted payload (its address + a one-time token); the
+  runner fetches every input from the bot with that token (each body is age-encrypted to this runner): a KIT of the game's
+  own tools and pack files (never in this repo; cached here only as ciphertext), a read-only world copy, and for a bundle
+  the clip + the players' skins. Mojang's Bedrock textures (Mojang/bedrock-samples) and Java sounds / font (Mojang's
+  launcher servers, `scripts/run_export.py`) are fetched at run time and are never cached or uploaded in clear. Results go
+  back encrypted to the bot (`result-<job>` artifact, 1 day); the bot deletes the run. `scripts/runner_job.py` opens the
+  payload and fetches the inputs.
 
 ## Privacy
 Clips and detailed logs are encrypted on the runner with [age](https://age-encryption.org) to the public recipient in

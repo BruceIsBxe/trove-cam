@@ -1,0 +1,110 @@
+name: map
+run-name: map ${{ inputs.job_id }}
+
+# Live map tiles for the Trove web admin (Bryce approved 2026-11-27).
+# The Da Club bot dispatches this nightly (and on a Co-Owner's Rebuild) with an age-encrypted payload
+# {"v":1,"kind":"map","base","token","inputs":{"kit","world"}} (to .github/cam-runner-recipient.txt). The runner fetches the
+# map kit (the game's livemap tool, cached here only as ciphertext to this runner) and a read-only world copy from the bot
+# with the one-time token (both arrive age-encrypted to this runner), draws the tiles, encrypts them to the bot (and the
+# owner's analysis key) and uploads them for 1 day; the bot downloads them and deletes the run.
+# PRIVACY: public repository. Inputs carry no names, ids or addresses in clear; the log says only stages and sizes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: bot job id (j + 12 hex)
+        required: true
+      payload:
+        description: base64 age ciphertext (see header)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  map:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check inputs
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          [[ "$JOB_ID" =~ ^j[0-9a-f]{12}$ ]] || { echo "bad job id"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q > /dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends age > /dev/null
+          python3 -m pip install -q --disable-pip-version-check pillow==11.0.0
+          echo "tools ok"
+
+      - name: Open payload
+        env:
+          PAYLOAD: ${{ inputs.payload }}
+          CAM_RUNNER_AGE_IDENTITY: ${{ secrets.CAM_RUNNER_AGE_IDENTITY }}
+        run: python3 scripts/runner_job.py open map
+
+      # The cache holds only the kit's age ciphertext (to this runner's key), keyed by the kit's plaintext sha256.
+      - name: Kit cache
+        uses: actions/cache@v4
+        with:
+          path: ~/kit-cache/map-kit.age
+          key: map-kit-${{ env.KIT_SHA }}
+
+      - name: Fetch inputs
+        env:
+          CAM_RUNNER_AGE_IDENTITY: ${{ secrets.CAM_RUNNER_AGE_IDENTITY }}
+        run: |
+          mkdir -p work/kit work/world out/log
+          python3 scripts/runner_job.py fetch kit work/kit.tar.gz --cache ~/kit-cache/map-kit.age
+          python3 scripts/runner_job.py fetch world work/world.tar.gz
+          tar -xzf work/kit.tar.gz -C work/kit --no-same-owner
+          tar -xzf work/world.tar.gz -C work/world --no-same-owner
+          rm -f work/kit.tar.gz work/world.tar.gz
+          [ -d work/world/db ] || { echo "world copy has no db/"; exit 1; }
+          echo "inputs ok"
+
+      - name: Draw tiles
+        run: |
+          set -o pipefail
+          T0=$(date +%s)
+          if python3 work/kit/tools/livemap/livemap.py --db work/world/db --out out/tiles > out/log/livemap.log 2>&1; then
+            echo "tiles ok: $(find out/tiles -name '*.png' | wc -l) tiles, $(du -sk out/tiles | cut -f1) KB, $(( $(date +%s) - T0 )) s"
+          else
+            echo "livemap failed" | tee out/log/failure.txt; tail -n 3 out/log/livemap.log | sed -E 's/[^A-Za-z ]//g' | head -c 200 >> out/log/failure.txt
+            exit 1
+          fi
+
+      - name: Encrypt and remove plaintext
+        if: always()
+        run: |
+          mkdir -p out/log enc
+          R1=$(cat .github/bot-recipient.txt); R2=$(cat .github/clip-recipient.txt)
+          if [ -f out/tiles/manifest.json ]; then tar -C out/tiles -czf - . | age -r "$R1" -r "$R2" -o enc/result.tar.gz.age; fi
+          tar -C out/log -czf - . | age -r "$R1" -r "$R2" -o enc/log.tar.gz.age
+          rm -rf out work "$RUNNER_TEMP/trove-job.json"
+          ls -l enc | awk 'NR>1{print $5, $9}'
+
+      - name: Upload encrypted tiles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ inputs.job_id }}
+          path: enc/result.tar.gz.age
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload encrypted log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ inputs.job_id }}
+          path: enc/log.tar.gz.age
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 0

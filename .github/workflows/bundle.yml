@@ -1,0 +1,120 @@
+name: bundle
+run-name: bundle ${{ inputs.job_id }}
+
+# 3D clip viewer bundles for the Trove web admin (Bryce approved 2026-11-27).
+# The Da Club bot dispatches this when staff press "Prepare 3D view" (or for a new report clip) with an age-encrypted
+# payload {"v":1,"kind":"bundle","base","token","inputs":{"kit","world","clip"}} (to .github/cam-runner-recipient.txt).
+# The runner fetches, with the one-time token and each age-encrypted to this runner: the clip kit (the game's cliprender
+# exporter + the pack files it reads; cached here only as ciphertext), the bot's read-only world copy and the clip input
+# (clip file + the players' skins). Mojang's Bedrock textures (Mojang/bedrock-samples) and Java sounds + font (Mojang's
+# launcher servers) are fetched at run time and never cached or uploaded in clear (scripts/run_export.py). The bundle is
+# encrypted to the bot (and the owner's analysis key) and uploaded for 1 day; the bot downloads it and deletes the run.
+# PRIVACY: public repository. The clip id never reaches this runner; player names exist only inside the encrypted inputs
+# and outputs; the exporter's own output goes to the encrypted log; this log says only stages and sizes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: bot job id (j + 12 hex)
+        required: true
+      payload:
+        description: base64 age ciphertext (see header)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check inputs
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          [[ "$JOB_ID" =~ ^j[0-9a-f]{12}$ ]] || { echo "bad job id"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q > /dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends age ffmpeg > /dev/null
+          python3 -m pip install -q --disable-pip-version-check numpy==2.1.3 pillow==11.0.0 imageio-ffmpeg==0.5.1
+          echo "tools ok"
+
+      - name: Open payload
+        env:
+          PAYLOAD: ${{ inputs.payload }}
+          CAM_RUNNER_AGE_IDENTITY: ${{ secrets.CAM_RUNNER_AGE_IDENTITY }}
+        run: python3 scripts/runner_job.py open bundle
+
+      # The cache holds only the kit's age ciphertext (to this runner's key), keyed by the kit's plaintext sha256.
+      - name: Kit cache
+        uses: actions/cache@v4
+        with:
+          path: ~/kit-cache/clip-kit.age
+          key: clip-kit-${{ env.KIT_SHA }}
+
+      - name: Fetch inputs
+        env:
+          CAM_RUNNER_AGE_IDENTITY: ${{ secrets.CAM_RUNNER_AGE_IDENTITY }}
+        run: |
+          mkdir -p work/kit work/world work/clip out/log
+          python3 scripts/runner_job.py fetch kit work/kit.tar.gz --cache ~/kit-cache/clip-kit.age
+          python3 scripts/runner_job.py fetch world work/world.tar.gz
+          python3 scripts/runner_job.py fetch clip work/clip.tar.gz
+          tar -xzf work/kit.tar.gz -C work/kit --no-same-owner
+          tar -xzf work/world.tar.gz -C work/world --no-same-owner
+          tar -xzf work/clip.tar.gz -C work/clip --no-same-owner
+          rm -f work/*.tar.gz
+          [ -d work/world/db ] && [ -f work/clip/clip.json.gz ] || { echo "inputs incomplete"; exit 1; }
+          echo "inputs ok"
+
+      - name: Export bundle
+        env:
+          MINECRAFT_DIR: ${{ runner.temp }}/mojang
+        run: |
+          T0=$(date +%s)
+          mkdir -p out/bundle
+          if python3 scripts/run_export.py work/kit --clip work/clip/clip.json.gz --skins work/clip/skins \
+              --world-db work/world/db --cache work/cache --out out/bundle > out/log/export.log 2>&1 \
+              && [ -f out/bundle/clip.json ]; then
+            echo "bundle ok: $(find out/bundle -type f | wc -l) files, $(du -sk out/bundle | cut -f1) KB, $(( $(date +%s) - T0 )) s"
+          else
+            echo "export failed" | tee out/log/failure.txt
+            tail -n 3 out/log/export.log >> out/log/failure.txt
+            exit 1
+          fi
+
+      - name: Encrypt and remove plaintext
+        if: always()
+        run: |
+          mkdir -p out/log enc
+          R1=$(cat .github/bot-recipient.txt); R2=$(cat .github/clip-recipient.txt)
+          if [ -f out/bundle/clip.json ]; then tar -C out/bundle -czf - . | age -r "$R1" -r "$R2" -o enc/result.tar.gz.age; fi
+          tar -C out/log -czf - . | age -r "$R1" -r "$R2" -o enc/log.tar.gz.age
+          rm -rf out work "$RUNNER_TEMP/trove-job.json" "$RUNNER_TEMP/mojang"
+          ls -l enc | awk 'NR>1{print $5, $9}'
+
+      - name: Upload encrypted bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ inputs.job_id }}
+          path: enc/result.tar.gz.age
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload encrypted log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ inputs.job_id }}
+          path: enc/log.tar.gz.age
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 0
